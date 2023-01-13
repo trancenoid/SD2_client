@@ -1,10 +1,7 @@
-
 import 'dart:async';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'dart:io';
 import 'package:flutter/services.dart';
-import 'package:image/image.dart' as imagelib;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -33,8 +30,6 @@ class SD2CanvasApp extends StatefulWidget {
   SD2CanvasAppState createState() => SD2CanvasAppState();
 }
 
-
-
 class SD2CanvasAppState extends State<SD2CanvasApp> {
   List<Offset> points = [];
   List<double> currTransform = [0.0, 0.0, 1.0]; // [x,y,scale]
@@ -42,25 +37,38 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
   late TransformationController tfmController;
   bool isZoomed = false;
   late ui.Image mainImage;
+  String currentImageSource = 'asset';
+  String currentImagePath = ("assets/sample.png");
+  late final ValueNotifier<bool> _isLoaded;
 
-  Future<ui.Image> loadImage(String path) async {
-    final ByteData bytes = await rootBundle.load(path);
-    ui.Image decodedImage = await decodeImageFromList(bytes.buffer.asUint8List());
-    return decodedImage;
+  void loadImage() async {
+    Uint8List img;
+    if (currentImageSource != 'asset') {
+      img = await File(currentImagePath).readAsBytes();
+    } else {
+      final bytes = await rootBundle.load(currentImagePath);
+      img = bytes.buffer.asUint8List();
+    }
+
+    final completer = Completer<ui.Image>();
+
+    ui.decodeImageFromList(img, (image) {
+      _isLoaded.value = true;
+      return completer.complete(image);
+    });
+    mainImage = await completer.future;
   }
 
-  Future<Widget> uiImageToWidget(ui.Image img) async {
+  Future<Widget> uiImageToImageWidget(ui.Image img) async {
     final bytes = await mainImage.toByteData(format: ui.ImageByteFormat.png);
-
-    return Image.memory(
-        Uint8List.view(bytes!.buffer)
-    );
+    return Image.memory(Uint8List.view(bytes!.buffer));
   }
 
   @override
   void initState() {
     super.initState();
-    mainImage = loadImage("assets/sample.png") as ui.Image;
+    _isLoaded = ValueNotifier<bool>(false);
+    loadImage();
     tfmController = TransformationController();
   }
 
@@ -69,6 +77,24 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
     double dy = o.dy;
     return Offset((dx - currTransform[0]) / currTransform[2],
         (dy - currTransform[1]) / currTransform[2]);
+  }
+
+  void interactionZoom(event) {
+    return;
+    Matrix4 zoomed = Matrix4.identity();
+    double x, y, scale;
+    scale = event is ScaleStartDetails ? 1.0 : event.scale;
+    if (1.0 <= scale && scale <= 4.0) {
+      print(scale);
+      x = -event.focalPoint.dx * (scale - 1);
+      y = -event.focalPoint.dy * (scale - 1);
+      zoomed
+        ..translate(x, y)
+        ..scale(scale);
+      setState(() {
+        currTransform = [x, y, scale];
+      });
+    }
   }
 
   Widget _makeCanvas() {
@@ -104,7 +130,9 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
           setState(() {
             if (event.pointerCount == 1) {
               points.add(transformOffset(event.localFocalPoint));
-              print(points[points.length - 1]);
+              // print(points[points.length - 1]);
+            } else {
+              interactionZoom(event);
             }
           });
         },
@@ -112,9 +140,16 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
           setState(() {
             if (event.pointerCount == 1) {
               points.add(transformOffset(event.localFocalPoint));
-              print(points[points.length - 1]);
+              // print(points[points.length - 1]);
+            } else {
+              interactionZoom(event);
             }
           });
+        },
+        onInteractionEnd: (event) {
+          if (event.pointerCount > 1) {
+            interactionZoom(event);
+          }
         },
         clipBehavior: Clip.none,
         panEnabled: false,
@@ -122,12 +157,10 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
         transformationController: tfmController,
         child: Stack(
           children: [
-            Center(
-              child: uiImageToWidget(mainImage),
-            ),
             CustomPaint(
-              size : Size(mainImage.width as double, mainImage.height as double),
-              painter: CanvasMaskPainter(points),
+              size:
+                  Size(mainImage.width.toDouble(), mainImage.height.toDouble()),
+              painter: CanvasMaskPainter(points, mainImage),
             ),
           ],
         ),
@@ -143,12 +176,27 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
       ),
       body: Column(
         children: [
-          ClipRect(
-            child: Align(
-              widthFactor: 1.0,
-              heightFactor: 1.0,
-              alignment: Alignment.center,
-              child: _makeCanvas(),
+          Expanded(
+            child: FittedBox(
+              alignment: FractionalOffset.center,
+              child: ClipRect(
+                child: ValueListenableBuilder(
+                  valueListenable: _isLoaded,
+                  builder: (_, loaded, __) {
+                    if (loaded) {
+                      return _makeCanvas();
+                    } else {
+                      return const SizedBox(
+                        height: double.maxFinite,
+                        width: double.maxFinite,
+                        child: Center(
+                          child: CircularProgressIndicator(),
+                        ),
+                      );
+                    }
+                  },
+                ),
+              ),
             ),
           ),
           // TextFormField(initialValue: "Realistic Landscape, Artstation",),
@@ -157,11 +205,19 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
             children: [
               MaterialButton(
                 onPressed: () async {
+                  _isLoaded.value =
+                      false; // hack to remove and redraw custom painter with new image
+                  // (need to investigate why this works)
                   ImagePicker picker = ImagePicker();
                   XFile? image =
                       await picker.pickImage(source: ImageSource.gallery);
                   setState(() {
-                    mainImage = Image.file(File(image!.path));
+                    if (image != null) {
+                      currentImageSource = 'local';
+                      currentImagePath = image.path;
+                    }
+
+                    loadImage();
                   });
                 },
                 color: Colors.blue,
@@ -173,18 +229,32 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
       ),
     );
   }
+
+  @override
+  void dispose() {
+    _isLoaded.dispose();
+    super.dispose();
+  }
 }
 
 class CanvasMaskPainter extends CustomPainter {
   List<Offset> points;
-
-  CanvasMaskPainter(this.points);
+  ui.Image mainImage;
+  CanvasMaskPainter(this.points, this.mainImage);
 
   @override
   void paint(Canvas canvas, Size size) {
     var paint1 = Paint()
       ..color = const Color(0xff63aa65)
-      ..strokeWidth = 10;
+      ..strokeWidth = 15;
+
+    paintImage(
+      image: mainImage,
+      canvas: canvas,
+      rect:
+          Rect.fromPoints(const Offset(0, 0), Offset(size.width, size.height)),
+      filterQuality: FilterQuality.high,
+    );
 
     canvas.clipRect(Rect.fromLTWH(0, 0, size.width, size.height));
     canvas.drawPoints(ui.PointMode.points, points, paint1);
