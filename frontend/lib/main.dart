@@ -39,6 +39,7 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
   late ui.Image mainImage;
   String currentImageSource = 'asset';
   String currentImagePath = ("assets/sample.png");
+  ValueNotifier<double> strokeWidthNotifier = ValueNotifier(6.0);
   late final ValueNotifier<bool> _isLoaded;
 
   void loadImage() async {
@@ -80,21 +81,21 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
   }
 
   void interactionZoom(event) {
+    // Matrix4 zoomed = Matrix4.identity();
+    // double x, y, scale;
+    // scale = event is ScaleStartDetails ? 1.0 : event.scale;
+    // if (1.0 <= scale && scale <= 4.0) {
+    //   print(scale);
+    //   x = -event.focalPoint.dx * (scale - 1);
+    //   y = -event.focalPoint.dy * (scale - 1);
+    //   zoomed
+    //     ..translate(x, y)
+    //     ..scale(scale);
+    //   setState(() {
+    //     currTransform = [x, y, scale];
+    //   });
+    // }
     return;
-    Matrix4 zoomed = Matrix4.identity();
-    double x, y, scale;
-    scale = event is ScaleStartDetails ? 1.0 : event.scale;
-    if (1.0 <= scale && scale <= 4.0) {
-      print(scale);
-      x = -event.focalPoint.dx * (scale - 1);
-      y = -event.focalPoint.dy * (scale - 1);
-      zoomed
-        ..translate(x, y)
-        ..scale(scale);
-      setState(() {
-        currTransform = [x, y, scale];
-      });
-    }
   }
 
   Widget _makeCanvas() {
@@ -160,7 +161,8 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
             CustomPaint(
               size:
                   Size(mainImage.width.toDouble(), mainImage.height.toDouble()),
-              painter: CanvasMaskPainter(points, mainImage),
+              painter: CanvasMaskPainter(points, mainImage,
+                  strokeWidthNotifier: strokeWidthNotifier),
             ),
           ],
         ),
@@ -171,14 +173,52 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.black,
       appBar: AppBar(
         title: const Text("SD2 Canvas"),
       ),
       body: Column(
         children: [
+          ButtonBar(
+            children: [
+              const IconButton(
+                  onPressed: null,
+                  icon: Icon(
+                    Icons.chrome_reader_mode,
+                    color: Colors.grey,
+                  )),
+              PopupMenuButton(
+                  position: PopupMenuPosition.under,
+                  color: Colors.black12,
+                  icon: const Icon(
+                    Icons.line_weight,
+                    color: Colors.blue,
+                  ),
+                  itemBuilder: (_) {
+                    return [
+                      PopupMenuItem(child: StatefulBuilder(
+                        builder: (BuildContext context, StateSetter setState) {
+                          return Slider(
+                            value: strokeWidthNotifier.value,
+                            min: 6.0,
+                            max: 60.0,
+                            divisions: 15,
+                            onChanged: (double newVal) {
+                              setState(() {
+                                strokeWidthNotifier.value = newVal;
+                              });
+                            },
+                          );
+                        },
+                      ))
+                    ];
+                  }),
+            ],
+          ),
           Expanded(
             child: FittedBox(
-              alignment: FractionalOffset.center,
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.center,
               child: ClipRect(
                 child: ValueListenableBuilder(
                   valueListenable: _isLoaded,
@@ -201,9 +241,16 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
           ),
           // TextFormField(initialValue: "Realistic Landscape, Artstation",),
           ButtonBar(
-            alignment: MainAxisAlignment.center,
+            alignment: MainAxisAlignment.end,
             children: [
-              MaterialButton(
+              const IconButton(
+                  onPressed: null,
+                  icon: Icon(
+                    Icons.redo,
+                    color: Colors.blue,
+                  )),
+              IconButton(
+                icon: const Icon(Icons.add_a_photo_sharp),
                 onPressed: () async {
                   _isLoaded.value =
                       false; // hack to remove and redraw custom painter with new image
@@ -221,10 +268,17 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
                   });
                 },
                 color: Colors.blue,
-                child: const Text("Select Image"),
               ),
+              IconButton(
+                  onPressed: () {
+                    points.clear();
+                  },
+                  icon: const Icon(
+                    Icons.cancel,
+                    color: Colors.blue,
+                  ))
             ],
-          )
+          ),
         ],
       ),
     );
@@ -240,13 +294,16 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
 class CanvasMaskPainter extends CustomPainter {
   List<Offset> points;
   ui.Image mainImage;
-  CanvasMaskPainter(this.points, this.mainImage);
+  ValueNotifier<double> strokeWidthNotifier;
+  CanvasMaskPainter(this.points, this.mainImage,
+      {required this.strokeWidthNotifier})
+      : super(repaint: strokeWidthNotifier);
 
   @override
   void paint(Canvas canvas, Size size) {
     var paint1 = Paint()
       ..color = const Color(0xff63aa65)
-      ..strokeWidth = 15;
+      ..strokeWidth = strokeWidthNotifier.value;
 
     paintImage(
       image: mainImage,
