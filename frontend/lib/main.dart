@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 import 'dart:io';
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 
 void main() => runApp(const SD2Canvas());
 
@@ -31,7 +32,7 @@ class SD2CanvasApp extends StatefulWidget {
 }
 
 class SD2CanvasAppState extends State<SD2CanvasApp> {
-  List<Offset> points = [];
+  List<Stroke> points = [];
   List<double> currTransform = [0.0, 0.0, 1.0]; // [x,y,scale]
   late TapDownDetails doubleTapDetails;
   late TransformationController tfmController;
@@ -39,25 +40,40 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
   late ui.Image mainImage;
   String currentImageSource = 'asset';
   String currentImagePath = ("assets/sample.png");
+  late Uint8List currentImageBytes;
+  BlendMode currMode = BlendMode.srcOver;
+  StrokeMaker strokeMaker = StrokeMaker();
+  int pointsTick = 0;
+
   ValueNotifier<double> strokeWidthNotifier = ValueNotifier(6.0);
   late final ValueNotifier<bool> _isLoaded;
 
-  void loadImage() async {
-    Uint8List img;
-    if (currentImageSource != 'asset') {
-      img = await File(currentImagePath).readAsBytes();
-    } else {
-      final bytes = await rootBundle.load(currentImagePath);
-      img = bytes.buffer.asUint8List();
-    }
-
+  Future<ui.Image> imageWidgetFromBytes(Uint8List? bytes) async {
     final completer = Completer<ui.Image>();
 
-    ui.decodeImageFromList(img, (image) {
-      _isLoaded.value = true;
+    ui.decodeImageFromList(bytes!, (image) {
       return completer.complete(image);
     });
-    mainImage = await completer.future;
+
+    return await completer.future;
+  }
+
+  void loadImage() async {
+    Uint8List img;
+    if (currentImageSource == 'File') {
+      img = await File(currentImagePath).readAsBytes();
+      currentImageBytes = img;
+    } else if (currentImageSource == 'asset') {
+      final bytes = await rootBundle.load(currentImagePath);
+      img = bytes.buffer.asUint8List();
+      currentImageBytes = img;
+    }
+    setMainImage(await imageWidgetFromBytes(currentImageBytes));
+  }
+
+  void setMainImage(ui.Image img) {
+    _isLoaded.value = true;
+    mainImage = img;
   }
 
   Future<Widget> uiImageToImageWidget(ui.Image img) async {
@@ -127,20 +143,48 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
         tfmController.value = zoomed;
       },
       child: InteractiveViewer(
-        onInteractionUpdate: (event) {
+        onInteractionStart: (event) {
           setState(() {
             if (event.pointerCount == 1) {
-              points.add(transformOffset(event.localFocalPoint));
-              // print(points[points.length - 1]);
+              strokeMaker.start(transformOffset(event.localFocalPoint),
+                  strokeWidthNotifier.value, currMode);
+
+              strokeMaker.currStroke.paint = Paint()
+                ..color = const Color(0xff63aa65)
+                ..strokeWidth = strokeMaker.currStroke.width
+                ..style = PaintingStyle.stroke
+                ..blendMode = strokeMaker.currStroke.mode;
+
+              // points.add(strokeMaker.currStroke);
+
             } else {
               interactionZoom(event);
             }
           });
         },
-        onInteractionStart: (event) {
+        onInteractionUpdate: (event) {
           setState(() {
             if (event.pointerCount == 1) {
-              points.add(transformOffset(event.localFocalPoint));
+              strokeMaker.addPoint(transformOffset(event.localFocalPoint));
+
+              strokeMaker.currStroke.paint = Paint()
+                ..color = const Color(0xff63aa65)
+                ..strokeWidth = strokeMaker.currStroke.width
+                ..style = PaintingStyle.stroke
+                ..blendMode = strokeMaker.currStroke.mode;
+
+              pointsTick++;
+              if (pointsTick%10 == 0) {
+                points.add(strokeMaker.currStroke);
+
+                strokeMaker.start(transformOffset(event.localFocalPoint),
+                    strokeWidthNotifier.value, currMode);
+
+                setState(() {
+                  pointsTick = 0;
+                });
+              }
+              // points.add(transformOffset(event.localFocalPoint));
               // print(points[points.length - 1]);
             } else {
               interactionZoom(event);
@@ -161,8 +205,11 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
             CustomPaint(
               size:
                   Size(mainImage.width.toDouble(), mainImage.height.toDouble()),
-              painter: CanvasMaskPainter(points, mainImage,
-                  strokeWidthNotifier: strokeWidthNotifier),
+              painter: CanvasMaskPainter(
+                  points: points,
+                  mainImage: mainImage,
+                  strokeWidthNotifier: strokeWidthNotifier,
+                  strokeMaker: strokeMaker),
             ),
           ],
         ),
@@ -181,12 +228,18 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
         children: [
           ButtonBar(
             children: [
-              const IconButton(
-                  onPressed: null,
-                  icon: Icon(
-                    Icons.chrome_reader_mode,
-                    color: Colors.grey,
-                  )),
+              IconButton(
+                  onPressed: () {
+                    setState(() {
+                      currMode = currMode == BlendMode.clear
+                          ? BlendMode.srcOver
+                          : BlendMode.clear;
+                    });
+                  },
+                  icon: Icon(Icons.chrome_reader_mode,
+                      color: currMode == BlendMode.clear
+                          ? Colors.blue
+                          : Colors.grey)),
               PopupMenuButton(
                   position: PopupMenuPosition.under,
                   color: Colors.black12,
@@ -243,9 +296,11 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
           ButtonBar(
             alignment: MainAxisAlignment.end,
             children: [
-              const IconButton(
-                  onPressed: null,
-                  icon: Icon(
+              IconButton(
+                  onPressed: () {
+                    points.removeLast();
+                  },
+                  icon: const Icon(
                     Icons.redo,
                     color: Colors.blue,
                   )),
@@ -255,17 +310,43 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
                   _isLoaded.value =
                       false; // hack to remove and redraw custom painter with new image
                   // (need to investigate why this works)
-                  ImagePicker picker = ImagePicker();
-                  XFile? image =
-                      await picker.pickImage(source: ImageSource.gallery);
-                  setState(() {
-                    if (image != null) {
-                      currentImageSource = 'local';
-                      currentImagePath = image.path;
-                    }
+                  FilePickerResult? result = await FilePicker.platform
+                      .pickFiles(
+                          type: FileType.custom,
+                          allowedExtensions: ['jpg', 'png']);
 
-                    loadImage();
-                  });
+                  if (kIsWeb && result != null && result.files.isNotEmpty) {
+                    Uint8List? bytes = result.files.first.bytes;
+                    setMainImage(await imageWidgetFromBytes(bytes));
+                    setState(() {
+                      currentImageSource = 'as_bytes';
+                      currentImageBytes = bytes!;
+                    });
+                  } else if (!kIsWeb) {
+                    String? path = result?.files.single.path;
+                    // ImagePicker picker = ImagePicker();
+
+                    if (path != null) {
+                      setState(() {
+                        currentImageSource = 'File';
+                        currentImagePath = path;
+                      });
+                    }
+                  }
+
+                  loadImage(); // load image regardless, if the pick image
+                  // action was cancelled this will load the prev image
+
+                  // XFile? image =
+                  //     await picker.pickImage(source: ImageSource.gallery);
+                  // setState(() {
+                  //   if (image != null) {
+                  //     currentImageSource = 'local';
+                  //     currentImagePath = image.path;
+                  //   }
+                  //
+                  //   loadImage();
+                  // });
                 },
                 color: Colors.blue,
               ),
@@ -291,19 +372,53 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
   }
 }
 
+class Stroke {
+  late Path path;
+  late double width;
+  late BlendMode mode;
+  late Paint paint;
+}
+
+class StrokeMaker {
+  late Stroke currStroke;
+  late int status = 0; // 0 for no stroke in progress , 1 for stroke in progress
+
+  void start(Offset startOffset, double width, BlendMode mode) {
+    status = 1;
+    currStroke = Stroke()
+      ..path = (Path()..moveTo(startOffset.dx, startOffset.dy))
+      ..width = width
+      ..mode = mode;
+  }
+
+  void addPoint(Offset point) {
+    currStroke.path.lineTo(point.dx, point.dy);
+  }
+
+  Stroke getStroke() {
+    status = 0;
+    return currStroke;
+  }
+}
+
 class CanvasMaskPainter extends CustomPainter {
-  List<Offset> points;
+  List<Stroke> points;
   ui.Image mainImage;
+  late StrokeMaker strokeMaker;
   ValueNotifier<double> strokeWidthNotifier;
-  CanvasMaskPainter(this.points, this.mainImage,
-      {required this.strokeWidthNotifier})
+  CanvasMaskPainter(
+      {required this.points,
+      required this.mainImage,
+      required this.strokeWidthNotifier,
+      required this.strokeMaker})
       : super(repaint: strokeWidthNotifier);
 
   @override
   void paint(Canvas canvas, Size size) {
     var paint1 = Paint()
       ..color = const Color(0xff63aa65)
-      ..strokeWidth = strokeWidthNotifier.value;
+      ..strokeWidth = strokeWidthNotifier.value
+      ..style = PaintingStyle.stroke;
 
     paintImage(
       image: mainImage,
@@ -312,9 +427,20 @@ class CanvasMaskPainter extends CustomPainter {
           Rect.fromPoints(const Offset(0, 0), Offset(size.width, size.height)),
       filterQuality: FilterQuality.high,
     );
+    //save base layer
+    canvas.saveLayer(Rect.fromLTWH(0, 0, size.width, size.height), Paint());
 
     canvas.clipRect(Rect.fromLTWH(0, 0, size.width, size.height));
-    canvas.drawPoints(ui.PointMode.points, points, paint1);
+
+    // add brush strokes
+    for (int i = 0; i < points.length; i++) {
+      canvas.drawPath(points[i].path, points[i].paint);
+    }
+
+    // blend erased-brush with base
+    canvas.restore();
+
+    // canvas.drawPoints(ui.PointMode.points, points, paint1);
   }
 
   @override
