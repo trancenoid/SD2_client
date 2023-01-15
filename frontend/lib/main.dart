@@ -33,17 +33,13 @@ class SD2CanvasApp extends StatefulWidget {
 
 class SD2CanvasAppState extends State<SD2CanvasApp> {
   List<Stroke> points = [];
-  List<double> currTransform = [0.0, 0.0, 1.0]; // [x,y,scale]
-  late TapDownDetails doubleTapDetails;
   late TransformationController tfmController;
-  bool isZoomed = false;
   late ui.Image mainImage;
   String currentImageSource = 'asset';
   String currentImagePath = ("assets/sample.png");
   late Uint8List currentImageBytes;
   BlendMode currMode = BlendMode.srcOver;
   StrokeMaker strokeMaker = StrokeMaker();
-  int pointsTick = 0;
 
   ValueNotifier<double> strokeWidthNotifier = ValueNotifier(6.0);
   late final ValueNotifier<bool> _isLoaded;
@@ -90,129 +86,49 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
   }
 
   Offset transformOffset(Offset o) {
-    double dx = o.dx;
-    double dy = o.dy;
-    return Offset((dx - currTransform[0]) / currTransform[2],
-        (dy - currTransform[1]) / currTransform[2]);
-  }
-
-  void interactionZoom(event) {
-    // Matrix4 zoomed = Matrix4.identity();
-    // double x, y, scale;
-    // scale = event is ScaleStartDetails ? 1.0 : event.scale;
-    // if (1.0 <= scale && scale <= 4.0) {
-    //   print(scale);
-    //   x = -event.focalPoint.dx * (scale - 1);
-    //   y = -event.focalPoint.dy * (scale - 1);
-    //   zoomed
-    //     ..translate(x, y)
-    //     ..scale(scale);
-    //   setState(() {
-    //     currTransform = [x, y, scale];
-    //   });
-    // }
-    return;
+    return tfmController.toScene(o);
   }
 
   Widget _makeCanvas() {
-    return GestureDetector(
-      onDoubleTapDown: (details) {
+    return InteractiveViewer(
+      minScale: 1.0,
+      maxScale: 4.0,
+      onInteractionStart: (event) {
         setState(() {
-          doubleTapDetails = details;
-          isZoomed = !isZoomed;
-        });
-      },
-      onDoubleTap: () {
-        Matrix4 zoomed = Matrix4.identity();
-        double x, y, scale;
-        if (!isZoomed) {
-          scale = 2.0;
-          x = -doubleTapDetails.localPosition.dx * (scale - 1);
-          y = -doubleTapDetails.localPosition.dy * (scale - 1);
-          zoomed
-            ..translate(x, y)
-            ..scale(scale);
-        } else {
-          x = y = 0;
-          scale = 1.0;
-        }
+          if (event.pointerCount == 1) {
+            strokeMaker.start(transformOffset(event.localFocalPoint),
+                strokeWidthNotifier.value, currMode);
 
-        setState(() {
-          currTransform = [x, y, scale];
-        });
-        tfmController.value = zoomed;
-      },
-      child: InteractiveViewer(
-        onInteractionStart: (event) {
-          setState(() {
-            if (event.pointerCount == 1) {
-              strokeMaker.start(transformOffset(event.localFocalPoint),
-                  strokeWidthNotifier.value, currMode);
+            strokeMaker.currStroke.paint = Paint()
+              ..color = const Color(0xff63aa65)
+              ..strokeWidth = strokeMaker.currStroke.width
+              ..style = PaintingStyle.stroke
+              ..blendMode = strokeMaker.currStroke.mode;
 
-              strokeMaker.currStroke.paint = Paint()
-                ..color = const Color(0xff63aa65)
-                ..strokeWidth = strokeMaker.currStroke.width
-                ..style = PaintingStyle.stroke
-                ..blendMode = strokeMaker.currStroke.mode;
-
-              // points.add(strokeMaker.currStroke);
-
-            } else {
-              interactionZoom(event);
-            }
-          });
-        },
-        onInteractionUpdate: (event) {
-          setState(() {
-            if (event.pointerCount == 1) {
-              strokeMaker.addPoint(transformOffset(event.localFocalPoint));
-
-              strokeMaker.currStroke.paint = Paint()
-                ..color = const Color(0xff63aa65)
-                ..strokeWidth = strokeMaker.currStroke.width
-                ..style = PaintingStyle.stroke
-                ..blendMode = strokeMaker.currStroke.mode;
-
-              pointsTick++;
-              if (pointsTick%10 == 0) {
-                points.add(strokeMaker.currStroke);
-
-                strokeMaker.start(transformOffset(event.localFocalPoint),
-                    strokeWidthNotifier.value, currMode);
-
-                setState(() {
-                  pointsTick = 0;
-                });
-              }
-              // points.add(transformOffset(event.localFocalPoint));
-              // print(points[points.length - 1]);
-            } else {
-              interactionZoom(event);
-            }
-          });
-        },
-        onInteractionEnd: (event) {
-          if (event.pointerCount > 1) {
-            interactionZoom(event);
+            points.add(strokeMaker.currStroke);
           }
-        },
-        clipBehavior: Clip.none,
-        panEnabled: false,
-        scaleEnabled: false,
-        transformationController: tfmController,
-        child: Stack(
-          children: [
-            CustomPaint(
-              size:
-                  Size(mainImage.width.toDouble(), mainImage.height.toDouble()),
-              painter: CanvasMaskPainter(
-                  points: points,
-                  mainImage: mainImage,
-                  strokeWidthNotifier: strokeWidthNotifier,
-                  strokeMaker: strokeMaker),
-            ),
-          ],
-        ),
+        });
+      },
+      onInteractionUpdate: (event) {
+        setState(() {
+          if (event.pointerCount == 1) {
+            strokeMaker.addPoint(transformOffset(event.localFocalPoint));
+            points.removeLast();
+            points.add(strokeMaker.currStroke);
+          }
+        });
+      },
+      clipBehavior: Clip.hardEdge,
+      panEnabled: false,
+      scaleEnabled: true,
+      transformationController: tfmController,
+      child: CustomPaint(
+        size: Size(mainImage.width.toDouble(), mainImage.height.toDouble()),
+        painter: CanvasMaskPainter(
+            points: points,
+            mainImage: mainImage,
+            strokeWidthNotifier: strokeWidthNotifier,
+            strokeMaker: strokeMaker),
       ),
     );
   }
@@ -220,7 +136,7 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: Colors.white,
       appBar: AppBar(
         title: const Text("SD2 Canvas"),
       ),
@@ -254,8 +170,8 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
                           return Slider(
                             value: strokeWidthNotifier.value,
                             min: 6.0,
-                            max: 60.0,
-                            divisions: 15,
+                            max: 100.0,
+                            divisions: 20,
                             onChanged: (double newVal) {
                               setState(() {
                                 strokeWidthNotifier.value = newVal;
@@ -266,44 +182,17 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
                       ))
                     ];
                   }),
-            ],
-          ),
-          Expanded(
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              alignment: Alignment.center,
-              child: ClipRect(
-                child: ValueListenableBuilder(
-                  valueListenable: _isLoaded,
-                  builder: (_, loaded, __) {
-                    if (loaded) {
-                      return _makeCanvas();
-                    } else {
-                      return const SizedBox(
-                        height: double.maxFinite,
-                        width: double.maxFinite,
-                        child: Center(
-                          child: CircularProgressIndicator(),
-                        ),
-                      );
-                    }
-                  },
+              IconButton(
+                onPressed: () {
+                  if (points.isNotEmpty) {
+                    points.removeLast();
+                  }
+                },
+                icon: const Icon(
+                  Icons.redo,
+                  color: Colors.blue,
                 ),
               ),
-            ),
-          ),
-          // TextFormField(initialValue: "Realistic Landscape, Artstation",),
-          ButtonBar(
-            alignment: MainAxisAlignment.end,
-            children: [
-              IconButton(
-                  onPressed: () {
-                    points.removeLast();
-                  },
-                  icon: const Icon(
-                    Icons.redo,
-                    color: Colors.blue,
-                  )),
               IconButton(
                 icon: const Icon(Icons.add_a_photo_sharp),
                 onPressed: () async {
@@ -336,17 +225,6 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
 
                   loadImage(); // load image regardless, if the pick image
                   // action was cancelled this will load the prev image
-
-                  // XFile? image =
-                  //     await picker.pickImage(source: ImageSource.gallery);
-                  // setState(() {
-                  //   if (image != null) {
-                  //     currentImageSource = 'local';
-                  //     currentImagePath = image.path;
-                  //   }
-                  //
-                  //   loadImage();
-                  // });
                 },
                 color: Colors.blue,
               ),
@@ -358,6 +236,61 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
                     Icons.cancel,
                     color: Colors.blue,
                   ))
+            ],
+          ),
+          Expanded(
+            child: FittedBox(
+              clipBehavior: Clip.hardEdge,
+              fit: BoxFit.scaleDown,
+              alignment: Alignment.center,
+              child: ValueListenableBuilder(
+                valueListenable: _isLoaded,
+                builder: (_, loaded, __) {
+                  if (loaded) {
+                    return _makeCanvas();
+                  } else {
+                    return const SizedBox(
+                      height: double.maxFinite,
+                      width: double.maxFinite,
+                      child: Center(
+                        child: CircularProgressIndicator(),
+                      ),
+                    );
+                  }
+                },
+              ),
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 10),
+            child: TextField(
+              style: TextStyle(
+                color: Colors.black,
+              ),
+              decoration: InputDecoration(
+                suffixIcon: Icon(color: Colors.blue, Icons.send),
+                fillColor: Colors.white,
+                filled: true,
+                hintText: "Realistic Landscape, Artstation",
+              ),
+              minLines: 1,
+              maxLines: 2,
+            ),
+          ),
+          ButtonBar(
+            alignment: MainAxisAlignment.end,
+            children: [
+              TextButton(
+                style: ButtonStyle(
+                  backgroundColor:
+                      MaterialStateProperty.all<Color>(Colors.blue),
+                ),
+                onPressed: null,
+                child: const Text(
+                  "Save",
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
             ],
           ),
         ],
@@ -415,11 +348,6 @@ class CanvasMaskPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    var paint1 = Paint()
-      ..color = const Color(0xff63aa65)
-      ..strokeWidth = strokeWidthNotifier.value
-      ..style = PaintingStyle.stroke;
-
     paintImage(
       image: mainImage,
       canvas: canvas,
@@ -439,8 +367,6 @@ class CanvasMaskPainter extends CustomPainter {
 
     // blend erased-brush with base
     canvas.restore();
-
-    // canvas.drawPoints(ui.PointMode.points, points, paint1);
   }
 
   @override
