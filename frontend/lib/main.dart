@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 void main() => runApp(const SD2Canvas());
 
@@ -40,6 +41,7 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
   late Uint8List currentImageBytes;
   BlendMode currMode = BlendMode.srcOver;
   StrokeMaker strokeMaker = StrokeMaker();
+  late String currentPrompt;
 
   ValueNotifier<double> strokeWidthNotifier = ValueNotifier(6.0);
   late final ValueNotifier<bool> _isLoaded;
@@ -131,6 +133,54 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
             strokeMaker: strokeMaker),
       ),
     );
+  }
+
+  Future<void> writeImageBytes(String filename, Uint8List bytes) async {
+    final directory = (await getExternalStorageDirectory())!.path;
+    await Directory('$directory/SD2Canvas_samples').create(recursive: true);
+    final fullPath =
+        '$directory/SD2Canvas_samples/${filename}_${DateTime.now().millisecondsSinceEpoch}.png';
+    print(fullPath);
+    final imgFile = File(fullPath);
+    imgFile.writeAsBytesSync(bytes);
+  }
+
+  Future<List<Uint8List>> captureMaskAndImage(List<Stroke> points) async {
+    ui.PictureRecorder recorder = ui.PictureRecorder();
+    Canvas recCanvas = Canvas(recorder);
+    Size size = Size(mainImage.width.toDouble(), mainImage.height.toDouble());
+    paintImage(
+      image: mainImage,
+      canvas: recCanvas,
+      rect:
+          Rect.fromPoints(const Offset(0, 0), Offset(size.width, size.height)),
+      filterQuality: FilterQuality.high,
+    );
+    ui.Image recordedImage = await recorder
+        .endRecording()
+        .toImage(size.width.toInt(), size.height.toInt());
+
+    recorder = ui.PictureRecorder();
+    recCanvas = Canvas(recorder);
+
+    for (int i = 0; i < points.length; i++) {
+      recCanvas.drawPath(points[i].path, points[i].paint);
+    }
+
+    ui.Image recordedMask = await recorder
+        .endRecording()
+        .toImage(size.width.toInt(), size.height.toInt());
+
+    Uint8List imageBytes = Uint8List.view(
+        (await recordedImage.toByteData(format: ui.ImageByteFormat.png))!
+            .buffer);
+    Uint8List maskBytes = Uint8List.view(
+        (await recordedMask.toByteData(format: ui.ImageByteFormat.png))!
+            .buffer);
+    writeImageBytes("image", imageBytes);
+    writeImageBytes("mask", maskBytes);
+
+    return [imageBytes, maskBytes];
   }
 
   @override
@@ -261,20 +311,37 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
               ),
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 10),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
             child: TextField(
-              style: TextStyle(
+              style: const TextStyle(
                 color: Colors.black,
               ),
               decoration: InputDecoration(
-                suffixIcon: Icon(color: Colors.blue, Icons.send),
+                suffixIcon: IconButton(
+                    onPressed: () {
+                      print(currentPrompt);
+                      captureMaskAndImage(points);
+                    },
+                    icon: const Icon(color: Colors.blue, Icons.send)),
                 fillColor: Colors.white,
                 filled: true,
                 hintText: "Realistic Landscape, Artstation",
               ),
               minLines: 1,
               maxLines: 2,
+              enableInteractiveSelection: true,
+              enableSuggestions: true,
+              onChanged: (String prompt) {
+                setState(() {
+                  currentPrompt = prompt;
+                });
+              },
+              onSubmitted: (String prompt) {
+                setState(() {
+                  currentPrompt = prompt;
+                });
+              },
             ),
           ),
           ButtonBar(
@@ -339,6 +406,8 @@ class CanvasMaskPainter extends CustomPainter {
   ui.Image mainImage;
   late StrokeMaker strokeMaker;
   ValueNotifier<double> strokeWidthNotifier;
+  ui.PictureRecorder recorder = ui.PictureRecorder();
+
   CanvasMaskPainter(
       {required this.points,
       required this.mainImage,
