@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:file_saver/file_saver.dart';
+import 'package:dio/dio.dart';
 
 void main() => runApp(const SD2Canvas());
 
@@ -135,12 +137,37 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
     );
   }
 
-  Future<void> writeImageBytes(String filename, Uint8List bytes) async {
-    final directory = (await getExternalStorageDirectory())!.path;
+  Future<void> writeImageBytes(
+      String filename, Uint8List bytes, String type) async {
+    String directory;
+    if (kIsWeb) {
+      // There is a bug in the CanvasKit as of Jan '22 which results in improper
+      // functioning of PictureRecorder, leading to inability to save image drawn
+      // on a canvas using toImage() ; Thus meanwhile original imageBytes is being
+      // saved for the image
+      if (type == 'image') {
+        bytes = currentImageBytes;
+      }
+      FileSaver.instance.saveFile(
+          "${filename}_${DateTime.now().millisecondsSinceEpoch}.png",
+          bytes,
+          'png',
+          mimeType: MimeType.PNG);
+
+      return;
+    } else if (Platform.isAndroid) {
+      directory = (await getExternalStorageDirectory())!.path;
+    } else if (Platform.isIOS) {
+      directory = (await getApplicationDocumentsDirectory()).path;
+    } else if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      directory = (await getDownloadsDirectory())!.path;
+    } else {
+      return;
+    }
+
     await Directory('$directory/SD2Canvas_samples').create(recursive: true);
     final fullPath =
         '$directory/SD2Canvas_samples/${filename}_${DateTime.now().millisecondsSinceEpoch}.png';
-    print(fullPath);
     final imgFile = File(fullPath);
     imgFile.writeAsBytesSync(bytes);
   }
@@ -177,8 +204,9 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
     Uint8List maskBytes = Uint8List.view(
         (await recordedMask.toByteData(format: ui.ImageByteFormat.png))!
             .buffer);
-    writeImageBytes("image", imageBytes);
-    writeImageBytes("mask", maskBytes);
+
+    // await writeImageBytes("image", imageBytes, 'image');
+    // await writeImageBytes("mask", maskBytes, 'mask');
 
     return [imageBytes, maskBytes];
   }
@@ -215,21 +243,27 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
                   ),
                   itemBuilder: (_) {
                     return [
-                      PopupMenuItem(child: StatefulBuilder(
-                        builder: (BuildContext context, StateSetter setState) {
-                          return Slider(
-                            value: strokeWidthNotifier.value,
-                            min: 6.0,
-                            max: 100.0,
-                            divisions: 20,
-                            onChanged: (double newVal) {
-                              setState(() {
-                                strokeWidthNotifier.value = newVal;
-                              });
-                            },
-                          );
-                        },
-                      ))
+                      PopupMenuItem(
+                        child: StatefulBuilder(
+                          builder:
+                              (BuildContext context, StateSetter setState) {
+                            return Slider(
+                              value: strokeWidthNotifier.value,
+                              min: 6.0,
+                              max: 100.0,
+                              divisions: 20,
+                              onChangeEnd: (val) {
+                                Navigator.pop(context, "Close_Popup");
+                              },
+                              onChanged: (double newVal) {
+                                setState(() {
+                                  strokeWidthNotifier.value = newVal;
+                                });
+                              },
+                            );
+                          },
+                        ),
+                      )
                     ];
                   }),
               IconButton(
@@ -239,7 +273,7 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
                   }
                 },
                 icon: const Icon(
-                  Icons.redo,
+                  Icons.undo,
                   color: Colors.blue,
                 ),
               ),
@@ -319,9 +353,25 @@ class SD2CanvasAppState extends State<SD2CanvasApp> {
               ),
               decoration: InputDecoration(
                 suffixIcon: IconButton(
-                    onPressed: () {
-                      print(currentPrompt);
-                      captureMaskAndImage(points);
+                    onPressed: () async {
+                      List<Uint8List> painting =
+                          await captureMaskAndImage(points);
+
+                      var data = FormData.fromMap({
+                        'prompt': currentPrompt,
+                        'image': MultipartFile.fromBytes(painting[0],
+                            filename: 'image.png'),
+                        'mask': MultipartFile.fromBytes(painting[1],
+                            filename: 'mask.png'),
+                      });
+
+                      // var response = await Dio()
+                      //     .post('http://127.0.0.1:8000/impaint', data: data);
+
+                      var response = await Dio().post(
+                          'http://127.0.0.1:8000/txt2img',
+                          data: {'txt': 'hello'});
+                      print(response);
                     },
                     icon: const Icon(color: Colors.blue, Icons.send)),
                 fillColor: Colors.white,
